@@ -17,6 +17,7 @@ export const CFG = {
     restockSecs: 300,         // the Seed Shop restocks every 5 minutes (everyone at the same time)
     restockGems: 12,          // restock it just for you, right now
     floorCap: 20,             // plants per floor
+    starterBoostMins: 10,     // x2 Cash for this long when the tutorial is done
     harvestReach: 1.4,        // studs added to a plant's radius: step this close to harvest it
     plantReach: 60,           // how far from you a seed can be planted
     sellReach: 32,            // how close to the market's middle counts as "at the counter"
@@ -249,6 +250,44 @@ export const TUTORIAL = [
     { kind: 'buy', n: 1, text: 'Buy another plant! 🌱', tip: 'Keep growing your garden' },
 ];
 export const TUTORIAL_GEMS = 10;
+// After the tutorial: goals, one at a time, each with a small reward. Progress is what the profile
+// already shows (so a goal you've already reached is done at once): plants in the garden (on floor 2
+// and up for 'plantsUp'), sells, harvests, seeds bought, floor upgrade levels, eggs hatched, wheel
+// spins, floors, mutations found
+export const GOALS = [
+    { kind: 'plants', n: 4, text: 'Grow 4 plants 🌱', gems: 3 },
+    { kind: 'sell', n: 3, text: 'Sell your crates 3 times 💰', gems: 3 },
+    { kind: 'buy', n: 6, text: 'Buy 6 seeds 🛒', gems: 3 },
+    { kind: 'fup', n: 1, text: 'Upgrade your floor ⬆️', tip: 'At the FLOOR UPGRADES board in your greenhouse', gems: 5 },
+    { kind: 'plants', n: 8, text: 'Grow 8 plants 🌱', cash: 1000 },
+    { kind: 'spin', n: 1, text: 'Spin the Beanstalk Wheel 🎡', tip: 'The wheel button on the right', gems: 3 },
+    { kind: 'egg', n: 1, text: 'Hatch an egg 🥚', tip: 'At the Egg Shop', gems: 5 },
+    { kind: 'harvest', n: 100, text: 'Harvest 100 times 🍎', gems: 5 },
+    { kind: 'plants', n: 14, text: 'Grow 14 plants 🌱', cash: 3000 },
+    { kind: 'floor', n: 2, text: 'Build Floor 2 🏢', gems: 10, spin: 1 },
+    { kind: 'plantsUp', n: 1, text: 'Plant on Floor 2 🌱', tip: 'The green lift pad by your door takes you up', gems: 5 },
+    { kind: 'fup', n: 5, text: 'Buy 5 floor upgrades ⬆️', gems: 5 },
+    { kind: 'mut', n: 1, text: 'Grow a mutated plant ✨', tip: 'Golden, Frozen, Rainbow... pets, luck and events help', gems: 5 },
+    { kind: 'egg', n: 3, text: 'Hatch 3 eggs 🥚', gems: 8 },
+    { kind: 'floor', n: 3, text: 'Build Floor 3 🏢', gems: 15, spin: 1 },
+    { kind: 'harvest', n: 1000, text: 'Harvest 1,000 times 🍎', gems: 10 },
+    { kind: 'floor', n: 4, text: 'Build Floor 4 🏢', gems: 20, spin: 1 },
+    { kind: 'floor', n: 5, text: 'Build Floor 5 🏢', gems: 25, spin: 2 },
+];
+// how far a profile is toward a goal of this kind (counters kept in p.cnt)
+export function goalValue(p, kind) {
+    const g = p.garden || {}, plants = g.plants || [], cnt = p.cnt || {};
+    switch (kind) {
+        case 'plants': return plants.length;
+        case 'plantsUp': return plants.filter((x) => x.f >= 1).length;
+        case 'sell': return p.sells || 0;
+        case 'harvest': return p.harvests || 0;
+        case 'floor': return g.floors || 1;
+        case 'fup': return (g.ups || []).reduce((a, u) => a + (u || []).reduce((b, v) => b + (v || 0), 0), 0);
+        case 'mut': return Object.values(p.index || {}).filter((bits) => bits > 1).length;
+        default: return cnt[kind] || 0;
+    }
+}
 // Daily quests (the reference's): five a day, each pays Gems
 export const DAILY_QUESTS = [
     { id: 'play', text: 'Play for 20 minutes', n: 20, gems: 10 },
@@ -313,6 +352,7 @@ export function rewardText(r, p) {
         r.seed ? speciesById[r.seed].ic + ' ' + speciesById[r.seed].name + ' seed' : '',
         r.egg ? eggById[r.egg].ic + ' ' + eggById[r.egg].name : '',
         r.boost ? BOOSTS[r.boost].ic + ' ' + BOOSTS[r.boost].name + ' (' + BOOSTS[r.boost].mins + ' min)' : '',
+        r.spin ? '🎡 +' + r.spin + ' wheel spin' + (r.spin > 1 ? 's' : '') : '',
     ].filter(Boolean).join(' + ');
 }
 

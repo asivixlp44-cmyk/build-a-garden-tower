@@ -9,7 +9,7 @@ import { verifyBloxityToken } from './bloxity.js';
 import {
     CFG, SPECIES, speciesById, speciesIndex, MUTATIONS, rollMutation, FLOORS, MAX_FLOORS, FLOOR_UPS, FLOOR_UP_MAX, floorUpCost,
     upDoubleChance, packUps, PETS, petById, EGGS, eggById, PET_SLOTS, PET_MAX, petBonus, PASSES, BOOSTS, eventAt, EVENT_LEN,
-    restockWindow, stockFor, TUTORIAL, TUTORIAL_GEMS, DAILY_QUESTS, INDEX_GEMS, INDEX_MUT_GEMS, GIFTS, FREE_PET_MINS, DAILY,
+    restockWindow, stockFor, TUTORIAL, TUTORIAL_GEMS, GOALS, goalValue, DAILY_QUESTS, INDEX_GEMS, INDEX_MUT_GEMS, GIFTS, FREE_PET_MINS, DAILY,
     WHEEL, WHEEL_SPIN_MINS, dailyStatus, dayKey, CODES, cashScale, rewardText, growthMult, harvestValue, sellMult, luckMult,
     KITS, SKINS, clamp, fmt, money,
 } from '../../shared/config.js';
@@ -145,7 +145,7 @@ export class GardenRoom extends Room {
             playSecs: 0, minAcc: 0, dirtyAt: 0, sealAt: 0, hvPending: 0,
             stats: {
                 fresh: now - (profile.firstPlay || 0) < 60000, harvests: 0, sells: 0, planted: 0, buys: 0, eggs: 0, cash0: profile.totalCash, floors0: profile.garden.floors,
-                tut0: profile.q.tut | 0, touch: false, fps: 0, fpsSum: 0, fpsN: 0, fpsMin: 0, q: '', gpu: '', load: 0, dev: null, errs: [], tutAt: {},
+                tut0: profile.q.tut | 0, goal0: profile.q.goal | 0, touch: false, fps: 0, fpsSum: 0, fpsN: 0, fpsMin: 0, q: '', gpu: '', load: 0, dev: null, errs: [], tutAt: {},
             },
         };
         this.sessions.set(client.sessionId, s);
@@ -203,6 +203,9 @@ export class GardenRoom extends Room {
         p.eq = arr(p.eq).filter((u) => p.pets.some((x) => x.u === u)).slice(0, this.slots(p));
         p.freePet = !!p.freePet;
         p.q.tut = clamp(Math.floor(num(p.q.tut, 0)), 0, TUTORIAL.length); p.q.pt = Math.max(0, Math.floor(num(p.q.pt, 0)));
+        p.q.goal = clamp(Math.floor(num(p.q.goal, 0)), 0, GOALS.length);
+        p.cnt = obj(p.cnt);
+        for (const k of Object.keys(p.cnt)) p.cnt[k] = Math.max(0, Math.floor(num(p.cnt[k], 0)));
         p.dq.p = obj(p.dq.p); p.dq.c = obj(p.dq.c); p.dq.day = String(p.dq.day || '');
         p.shop.bought = obj(p.shop.bought); p.shop.w = num(p.shop.w, -1); p.shop.roll = num(p.shop.roll, 0);
         p.bean = num(p.bean, -1);
@@ -284,7 +287,7 @@ export class GardenRoom extends Room {
         recordSession({
             at: new Date(), secs: Math.round((Date.now() - s.joinedAt) / 1000), fresh: st.fresh, touch: st.touch,
             fps: st.fpsN ? Math.round(st.fpsSum / st.fpsN) : st.fps, fpsMin: st.fpsMin, q: st.q, gpu: st.gpu, load: st.load, dev: st.dev, errs: st.errs,
-            tut0: st.tut0, tut: p.q.tut, tutAt: st.tutAt, harvests: st.harvests, sells: st.sells, planted: st.planted, buys: st.buys, eggs: st.eggs,
+            tut0: st.tut0, tut: p.q.tut, tutAt: st.tutAt, goal0: st.goal0, goal: p.q.goal, harvests: st.harvests, sells: st.sells, planted: st.planted, buys: st.buys, eggs: st.eggs,
             cash: (p.totalCash || 0) - (st.cash0 || 0), floors0: st.floors0, floors: p.garden.floors, gifts: Object.keys(s.giftClaimed).length,
         }).catch((e) => console.warn('[stats]', e.message));
         if (!isOnline(p.uid)) releaseProfile(p.uid, isOnline);
@@ -315,11 +318,12 @@ export class GardenRoom extends Room {
         const now = Date.now();
         this.shopOf(p, now);
         this.dqOf(p, now);
+        this.checkGoals(s);
         const m = {
             cash: p.cash, totalCash: p.totalCash, gems: p.gems, playtime: p.playtime, seeds: p.seeds, carry: p.carry,
             pets: p.pets, eq: p.eq, freePet: p.freePet, index: p.index, q: p.q, dq: p.dq, daily: p.daily, codes: p.codes,
             passes: p.passes, boosts: p.boosts, spins: p.spins, spinSecs: p.spinSecs, shop: p.shop, bean: p.bean,
-            harvests: p.harvests, sells: p.sells, firstPlay: p.firstPlay, giftClaimed: s.giftClaimed, sessionSecs: s.playSecs, now, plot: s.plot,
+            harvests: p.harvests, sells: p.sells, goalP: p.q.goal < GOALS.length ? goalValue(p, GOALS[p.q.goal].kind) : 0, firstPlay: p.firstPlay, giftClaimed: s.giftClaimed, sessionSecs: s.playSecs, now, plot: s.plot,
         };
         if (seal || now - s.sealAt > 10000) { s.sealAt = now; m.save = sealProfile(p); }
         s.client.send('profile', m);
@@ -379,10 +383,33 @@ export class GardenRoom extends Room {
         q.tut++; q.pt = 0;
         s.stats.tutAt[q.tut] = s.playSecs;
         const done = q.tut >= TUTORIAL.length;
-        if (done) { p.gems += TUTORIAL_GEMS; p.spins += 1; }
+        // done: Gems, a wheel spin and a starter boost (x2 Cash for the next minutes)
+        if (done) {
+            p.gems += TUTORIAL_GEMS; p.spins += 1;
+            const now = Date.now();
+            p.boosts.cash2 = Math.max(now, p.boosts.cash2 || 0) + CFG.starterBoostMins * 60000;
+            this.toast(s, '🚀 Starter Boost: x2 Cash for ' + CFG.starterBoostMins + ' minutes!', GOLD);
+        }
         s.client.send('quest', { tut: q.tut - 1, done, gems: done ? TUTORIAL_GEMS : 0, skipped });
         this.changed(s);
     }
+    // the goals after the tutorial: every one reached pays out and the next one starts (a goal already
+    // reached is done at once)
+    checkGoals(s) {
+        const p = s.profile, q = p.q;
+        if (q.tut < TUTORIAL.length) return;
+        let guard = 0;
+        while (q.goal < GOALS.length && guard++ < GOALS.length) {
+            const G = GOALS[q.goal];
+            if (goalValue(p, G.kind) < G.n) return;
+            q.goal++;
+            const text = rewardText(G, p);
+            this.giveReward(s, G);
+            s.client.send('goal', { k: q.goal - 1, text });
+            markDirty();
+        }
+    }
+    count(p, k) { p.cnt[k] = (p.cnt[k] || 0) + 1; }
     onSkip(client) {
         const s = this.sessions.get(client.sessionId);
         if (!s || s.profile.q.tut >= TUTORIAL.length) return;
@@ -511,6 +538,7 @@ export class GardenRoom extends Room {
         p.shop.bought[sp.id] = (p.shop.bought[sp.id] || 0) + 1;
         p.seeds[sp.id] = (p.seeds[sp.id] || 0) + 1;
         s.stats.buys++;
+        this.count(p, 'buy');
         client.send('bought', { id: sp.id });
         this.bump(s, 'buy', 1);
         this.changed(s);
@@ -672,6 +700,7 @@ export class GardenRoom extends Room {
         p.pets.push({ u, id });
         if (p.eq.length < this.slots(p)) p.eq.push(u);
         s.stats.eggs++;
+        this.count(p, 'egg');
         s.client.send('hatch', { egg: egg.id, pet: id, u, eq: p.eq.includes(u) });
         this.changed(s);
     }
@@ -734,6 +763,7 @@ export class GardenRoom extends Room {
         if (r.seed) p.seeds[r.seed] = (p.seeds[r.seed] || 0) + 1;
         if (r.boost) { const now = Date.now(); p.boosts[r.boost] = Math.max(now, p.boosts[r.boost] || 0) + BOOSTS[r.boost].mins * 60000; }
         if (r.egg) this.hatch(s, eggById[r.egg]);
+        if (r.spin) p.spins = Math.min(99, p.spins + r.spin);
     }
     onSpin(client) {
         const s = this.sessions.get(client.sessionId);
@@ -741,6 +771,7 @@ export class GardenRoom extends Room {
         const p = s.profile;
         if (p.spins <= 0) return this.toast(s, '🎡 No spins left: you get one every ' + WHEEL_SPIN_MINS + ' minutes you play', BLUE);
         p.spins--;
+        this.count(p, 'spin');
         const k = weighted(WHEEL.map((w, i) => [i, w.w]), Math.random);
         const r = WHEEL[k];
         client.send('spun', { k, text: rewardText(r, p) });

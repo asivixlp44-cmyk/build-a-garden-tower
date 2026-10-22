@@ -24,10 +24,10 @@ import {
     setPlantTag, setPlaceBar, askConfirm, myFloors, buyFloor, stockLeft, canBuyAny,
 } from './ui.js';
 import {
-    CFG, SPECIES, SHOP_SEEDS, speciesById, MUTATIONS, TUTORIAL, KITS, SKINS, FLOORS, MAX_FLOORS, eventAt, restockWindow, fmt, money, clamp, petById,
+    CFG, SPECIES, SHOP_SEEDS, speciesById, MUTATIONS, TUTORIAL, GOALS, KITS, SKINS, FLOORS, MAX_FLOORS, eventAt, restockWindow, fmt, money, clamp, petById,
 } from '../../shared/config.js';
 import {
-    FRAMES, PLOT_SPAWN, PLOT_W, PLOT_D, toWorld, toLocal, floorY, floorAt, canPlace, snap, CRATE, LIFT_UP, LIFT_DOWN, PLANT_AREA,
+    FRAMES, PLOT_SPAWN, PLOT_W, PLOT_D, toWorld, toLocal, floorY, floorAt, canPlace, snap, CRATE, LIFT_UP, LIFT_DOWN, PLANT_AREA, BOARD,
     SPOTS, BEAN_TOP, PLAZA_R, ROAD_R, COUNTER_R, FLOOR_H,
 } from '../../shared/garden.js';
 
@@ -284,7 +284,7 @@ addEventListener('keydown', (e) => {
     if (!running || e.repeat) return;
     if (e.code === 'Escape') { if (closeTop()) return; if (S.seedSel) { actions.selectSeed(''); return; } if (BX.isEmbedded()) BX.showPortalMenu(); return; }
     if (anyPopup()) return;
-    if (e.code === 'KeyE' && activePrompt) usePrompt();
+    if (e.code === 'KeyE') { if (activePrompt) usePrompt(); else if (S.seedSel && S.seedSel !== 'shovel' && inMyPlot()) confirmPlace(); }
     if (e.code === 'KeyR' && S.seedSel && S.seedSel !== 'shovel') { placeRot = (placeRot + 1) % 8; sfx('click'); }
     if (e.code === 'KeyQ') actions.selectSeed('');
     if (/^Digit[1-9]$/.test(e.code)) {
@@ -448,13 +448,36 @@ function updatePlacement(t) {
     let x = snap(l.x), z = snap(l.z);
     // keep it inside the planting area
     x = clamp(x, PLANT_AREA.x0 + sp.r, PLANT_AREA.x1 - sp.r); z = clamp(z, PLANT_AREA.z0 + sp.r, PLANT_AREA.z1 - sp.r);
-    const why = canPlace(myPlants().map(footprint), f, x, z, sp.r);
+    let why = canPlace(myPlants().map(footprint), f, x, z, sp.r);
+    // a spot that's taken: the ghost moves to the nearest free one, so planting just works
+    if (why === 'Too close to another plant') {
+        const free = freeSpotNear(f, x, z, sp.r);
+        if (free) { x = free[0]; z = free[1]; why = ''; }
+    }
     placeOk = !why; placeWhy = why;
     Object.assign(place, { f, x, z });
     const ww = toWorld(myPlot, x, z);
     place.world.set(ww.x, y, ww.z);
     showGhost(id, place.world, FRAMES[myPlot].yaw + placeRot * Math.PI / 4, placeOk, t);
     setPlaceBar(true, why ? '🚫 ' + why : '');
+}
+// the free planting spot nearest (x, z) on floor f, or null (remembered while nothing changes)
+const freeMemo = { key: '', spot: null };
+function freeSpotNear(f, x, z, r) {
+    const plants = myPlants(), key = f + ',' + x + ',' + z + ',' + r + ',' + plants.length + ',' + (plants.length ? plants[plants.length - 1].id : '');
+    if (key === freeMemo.key) return freeMemo.spot;
+    const fp = plants.map(footprint), A = PLANT_AREA;
+    let spot = null;
+    for (let d = 1; d <= 18 && !spot; d++) {
+        const n = 8 + d * 4;
+        for (let k = 0; k < n; k++) {
+            const a = (k / n) * Math.PI * 2;
+            const cx = clamp(snap(x + Math.cos(a) * d), A.x0 + r, A.x1 - r), cz = clamp(snap(z + Math.sin(a) * d), A.z0 + r, A.z1 - r);
+            if (!canPlace(fp, f, cx, cz, r)) { spot = [cx, cz]; break; }
+        }
+    }
+    freeMemo.key = key; freeMemo.spot = spot;
+    return spot;
 }
 function confirmPlace() {
     const sel = S.seedSel;
@@ -627,21 +650,48 @@ function guide() {
     const plotIn = () => { aim = 'home'; const w = toWorld(myPlot, 0, (PLANT_AREA.z0 + PLANT_AREA.z1) / 2); opt.beam = FLOOR_H - 3; return guideV.set(w.x, floorY(0), w.z); };
     const crate = () => { aim = 'home'; const w = toWorld(myPlot, CRATE.x, CRATE.z); opt.up = pl.crateN * CRATE_H; return guideV.set(w.x, 0, w.z); };
     // the plant that ripens first (the ripe ones first of all)
-    const nextRipe = () => {
+    const nextRipe = (onlyRipe) => {
         const now = net.now();
         let best = null, bt = Infinity;
         for (const p of myPlants()) { const k = Math.max(0, p.fa - now); if (k < bt) { bt = k; best = p; } }
-        if (!best) return null;
+        if (!best || (onlyRipe && bt > 0)) return null;
         aim = 'home'; plantWorld(best, guideV); opt.up = plantHeight(best.sp); opt.beam = FLOOR_H - 3;
         return guideV;
+    };
+    // in the greenhouse with a seed in hand: the arrow over where it will go
+    const ghostSpot = () => {
+        if (!S.seedSel || S.seedSel === 'shovel' || !placeOk) return null;
+        aim = 'home'; opt.beam = FLOOR_H - 3; opt.max = 1.2;
+        return guideV.copy(place.world);
+    };
+    // the goals after the tutorial: where each one is done
+    const goal = !tut && (q.goal || 0) < GOALS.length ? GOALS[q.goal] : null;
+    const earn = () => (pl.crate > 0 ? crate() : nextRipe() || plotIn());
+    const atWorld = (x, y, z) => guideV.set(x, y, z);
+    const goalTarget = (kind) => {
+        const inPlot = inMyPlot(), f = inPlot ? clamp(floorAt(P.pos.y), 0, myFloors() - 1) : 0;
+        if (kind === 'plants') return hasSeed ? (inPlot ? ghostSpot() : plotIn()) : canBuyAny(net.now()) ? market() : earn();
+        if (kind === 'plantsUp') {
+            if (inPlot && f >= 1) return hasSeed ? ghostSpot() : null;
+            if (!hasSeed) return canBuyAny(net.now()) ? market() : earn();
+            if (!inPlot) return plotIn();
+            aim = 'home'; opt.beam = FLOOR_H - 3; const w = toWorld(myPlot, LIFT_UP.x, LIFT_UP.z); return atWorld(w.x, floorY(0), w.z);
+        }
+        if (kind === 'buy') return canBuyAny(net.now()) ? market() : earn();
+        if (kind === 'sell') return pl.crate > 0 ? crate() : nextRipe(true);
+        if (kind === 'harvest') return nextRipe(true);
+        if (kind === 'fup') { aim = 'home'; opt.beam = FLOOR_H - 3; const w = toWorld(myPlot, BOARD.x, BOARD.z + 4); return atWorld(w.x, floorY(f), w.z); }
+        if (kind === 'egg') { const s = SPOTS.pets, d = Math.hypot(s.x, s.z) || 1; return atWorld(s.x - s.x / d * 13, 0, s.z - s.z / d * 13); }
+        return null;
     };
     // the last step ("buy another plant") with too little Cash for any seed: earn some first
     const broke = tut === 'buy' && q.tut === TUTORIAL.length - 1 && !canBuyAny(net.now());
     let target = null;
     if (S.carry > 0 && (!tut || tut === 'sell' || tut === 'collect' || broke)) target = market();
     else if (broke) target = pl.crate > 0 ? crate() : nextRipe() || plotIn();
+    else if (!tut && goal) target = goalTarget(goal.kind);
     else if (tut === 'buy') target = hasSeed && q.tut === 0 ? plotIn() : market();
-    else if (tut === 'plant') target = hasSeed ? (inMyPlot() ? null : plotIn()) : market();
+    else if (tut === 'plant') target = hasSeed ? (inMyPlot() ? ghostSpot() : plotIn()) : market();
     else if (tut === 'harvest') target = nextRipe();
     else if (tut === 'collect') target = pl.crate > 0 ? crate() : null;
     else if (tut === 'sell') target = pl.crate > 0 ? crate() : null;
@@ -1091,6 +1141,15 @@ async function connect(name, endpoint) {
             sfx('quest');
         }
         sparkleColumn(P.pos, 0xd23cff);
+    });
+    room.onMessage('goal', (m) => {
+        const G = GOALS[m.k];
+        if (!G) return;
+        setTimeout(() => {
+            questPop('🎯 GOAL COMPLETE!', G.text.replace(/[^\w !',]/g, '').trim() + ': ' + m.text, '🎯');
+            bigText('GOAL COMPLETE!', '#ffe24a');
+            sfx('questBig'); confetti(P.pos); sparkleColumn(P.pos, 0xffd21e);
+        }, 300);
     });
     room.onMessage('discover', (m) => {
         const sp = speciesById[m.sp], mu = MUTATIONS[m.m];

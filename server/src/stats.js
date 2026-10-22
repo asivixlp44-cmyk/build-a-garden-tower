@@ -56,6 +56,8 @@ export async function statsSummary(days, raw) {
         // new players: the median second of their session each tutorial step was reached
         tutorialSecs: Object.fromEntries(TUTORIAL.map((t, i) => [String(i + 1), median(fresh.map((d) => (d.tutAt || {})[i + 1] || 0))])),
         builtAFloorPct: pct(list.filter((d) => d.floors > d.floors0).length, list.length),
+        // the goals after the tutorial: where sessions that finished it ended up
+        goalsReached: (() => { const done = list.filter((d) => (d.tut || 0) >= TUTORIAL.length && d.goal !== undefined); const m = {}; for (const d of done) m[d.goal] = (m[d.goal] || 0) + 1; return Object.fromEntries(Object.entries(m).map(([k, n]) => [k, pct(n, done.length) + '%'])); })(),
         avgPlanted: avg(list, (d) => d.planted),
         avgHarvests: Math.round(avg(list, (d) => d.harvests)),
         avgSells: avg(list, (d) => d.sells),

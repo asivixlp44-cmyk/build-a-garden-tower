@@ -12,7 +12,7 @@ import { getQuality, setQuality } from './fx.js';
 import {
     CFG, SPECIES, SHOP_SEEDS, speciesById, RARITIES, MUTATIONS, FLOORS, MAX_FLOORS, FLOOR_UPS, FLOOR_UP_MAX, floorUpCost, upValueMult, upSpeedMult,
     upDoubleChance, unpackUps, PETS, petById, EGGS, eggById, PET_SLOTS, petBonus, PASSES, BOOSTS, eventAt, EVENTS, restockWindow, restockLeft, stockFor,
-    TUTORIAL, DAILY_QUESTS, INDEX_GEMS, INDEX_MUT_GEMS, GIFTS, FREE_PET_MINS, DAILY, WHEEL, WHEEL_SPIN_MINS, dailyStatus, rewardText, fmt, fmtComma,
+    TUTORIAL, GOALS, DAILY_QUESTS, INDEX_GEMS, INDEX_MUT_GEMS, GIFTS, FREE_PET_MINS, DAILY, WHEEL, WHEEL_SPIN_MINS, dailyStatus, rewardText, fmt, fmtComma,
     money, clock, playtimeText, clamp,
 } from '../../shared/config.js';
 
@@ -55,8 +55,16 @@ export function updateHud() {
     const now = net.now();
     // the tutorial (with SKIP), or nothing
     const q = S.q || {}, tut = q.tut < TUTORIAL.length ? TUTORIAL[q.tut] : null;
-    $('#tutBanner').hidden = !tut;
-    if (tut) { setText($('#tutTxt'), tut.text); setText($('#tutTip'), q.tut === TUTORIAL.length - 1 && !canBuyAny(now) ? 'Harvest and sell more crates to afford one! 📦' : tut.tip); }
+    // after it, the goals (with how far you are and what they pay)
+    const goal = !tut && (q.goal || 0) < GOALS.length ? GOALS[q.goal] : null;
+    $('#tutBanner').hidden = !tut && !goal;
+    $('#skipBtn').hidden = !tut;
+    if (tut) { setText($('#tutTxt'), tut.text); setText($('#tutTip'), tutTip(q, tut, now)); }
+    else if (goal) {
+        setText($('#tutTxt'), '🎯 ' + goal.text);
+        setText($('#tutTip'), (goal.tip ? goal.tip + ' · ' : '') + fmtComma(Math.min(goal.n, S.goalP || 0)) + '/' + fmtComma(goal.n) + ' · 🎁 ' + rewardText(goal, S));
+    }
+    $('#btnWheel').classList.toggle('hint', !!goal && goal.kind === 'spin' && S.spins > 0);
     // the daily quest tracker: the first one not done yet
     const dq = S.dq || { p: {}, c: {} };
     const Q = DAILY_QUESTS.find((x) => !(dq.c || {})[x.id]);
@@ -88,7 +96,8 @@ export function updateHud() {
     const f = myFloors();
     $('#floorBadge').hidden = !(f < MAX_FLOORS && S.cash >= FLOORS[f].price);
     // the next floor: a bar filling up with your Cash (once the tutorial is done)
-    const fg = $('#floorGoal'), showFg = !tut && f < MAX_FLOORS;
+    // (shown once it's within reach: a fifth of the price saved, or when it's the goal)
+    const fg = $('#floorGoal'), showFg = !tut && f < MAX_FLOORS && (S.cash >= FLOORS[f].price * 0.2 || (!!goal && goal.kind === 'floor'));
     fg.hidden = !showFg;
     if (showFg) {
         const F = FLOORS[f], ready = S.cash >= F.price;
@@ -110,6 +119,12 @@ export function updateHud() {
     if (modalKind === 'seeds' || modalKind === 'wheel' || modalKind === 'gifts' || modalKind === 'quests') refreshModal();
 }
 export const slots = () => PET_SLOTS + ((S.passes || {}).PetSlot ? 1 : 0);
+// the tutorial's hint line: what to do right now
+function tutTip(q, tut, now) {
+    if (q.tut === TUTORIAL.length - 1 && !canBuyAny(now)) return 'Harvest and sell more crates to afford one! 📦';
+    if (tut.kind === 'plant' && S.seedSel && S.seedSel !== 'shovel' && actions.onMyPlot && actions.onMyPlot()) return document.body.classList.contains('touch') ? 'Tap PLANT to plant it here! 🌱' : 'Click the floor to plant it here (or press E) 🌱';
+    return tut.tip;
+}
 // can you afford any seed the Seed Shop has in stock right now?
 export const canBuyAny = (now) => SHOP_SEEDS.some((sp) => S.cash >= sp.price && stockLeft(sp.id, now) > 0);
 
