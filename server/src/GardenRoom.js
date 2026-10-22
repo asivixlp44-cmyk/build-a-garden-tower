@@ -143,7 +143,10 @@ export class GardenRoom extends Room {
             id: client.sessionId, client, profile, player, pid: player.pid, plot,
             pos: { x: player.x, y: 0, z: player.z }, joinedAt: now, giftClaimed: {}, friends: 0, guest, lastChat: 0,
             playSecs: 0, minAcc: 0, dirtyAt: 0, sealAt: 0, hvPending: 0,
-            stats: { fresh: now - (profile.firstPlay || 0) < 60000, harvests: 0, sells: 0, planted: 0, buys: 0, eggs: 0, cash0: profile.totalCash, floors0: profile.garden.floors, touch: false, fps: 0 },
+            stats: {
+                fresh: now - (profile.firstPlay || 0) < 60000, harvests: 0, sells: 0, planted: 0, buys: 0, eggs: 0, cash0: profile.totalCash, floors0: profile.garden.floors,
+                tut0: profile.q.tut | 0, touch: false, fps: 0, fpsSum: 0, fpsN: 0, fpsMin: 0, q: '', gpu: '', load: 0, dev: null, errs: [], tutAt: {},
+            },
         };
         this.sessions.set(client.sessionId, s);
         this.away(s, now);
@@ -279,8 +282,9 @@ export class GardenRoom extends Room {
         if (this.state.plots[s.plot] && this.state.plots[s.plot].owner === s.id) this.detachPlot(s.plot);
         const st = s.stats;
         recordSession({
-            at: new Date(), secs: Math.round((Date.now() - s.joinedAt) / 1000), fresh: st.fresh, touch: st.touch, fps: st.fps,
-            tut: p.q.tut, harvests: st.harvests, sells: st.sells, planted: st.planted, buys: st.buys, eggs: st.eggs,
+            at: new Date(), secs: Math.round((Date.now() - s.joinedAt) / 1000), fresh: st.fresh, touch: st.touch,
+            fps: st.fpsN ? Math.round(st.fpsSum / st.fpsN) : st.fps, fpsMin: st.fpsMin, q: st.q, gpu: st.gpu, load: st.load, dev: st.dev, errs: st.errs,
+            tut0: st.tut0, tut: p.q.tut, tutAt: st.tutAt, harvests: st.harvests, sells: st.sells, planted: st.planted, buys: st.buys, eggs: st.eggs,
             cash: (p.totalCash || 0) - (st.cash0 || 0), floors0: st.floors0, floors: p.garden.floors, gifts: Object.keys(s.giftClaimed).length,
         }).catch((e) => console.warn('[stats]', e.message));
         if (!isOnline(p.uid)) releaseProfile(p.uid, isOnline);
@@ -373,6 +377,7 @@ export class GardenRoom extends Room {
         // the first harvest pays the tutorial's bonus (the reference gives you some Cash right there)
         if (TUTORIAL[q.tut].kind === 'harvest' && q.tut === 2) { this.addCash(s, CFG.tutorialBonus); this.toast(s, '🎉 Tutorial bonus: +' + money(CFG.tutorialBonus) + '!', GREEN); }
         q.tut++; q.pt = 0;
+        s.stats.tutAt[q.tut] = s.playSecs;
         const done = q.tut >= TUTORIAL.length;
         if (done) { p.gems += TUTORIAL_GEMS; p.spins += 1; }
         s.client.send('quest', { tut: q.tut - 1, done, gems: done ? TUTORIAL_GEMS : 0, skipped });
@@ -825,8 +830,18 @@ export class GardenRoom extends Room {
     onMeta(client, m) {
         const s = this.sessions.get(client.sessionId);
         if (!s) return;
-        if (typeof m.touch === 'boolean') s.stats.touch = m.touch;
-        if (finite(m.fps)) s.stats.fps = clamp(Math.round(m.fps), 0, 240);
+        const st = s.stats;
+        if (typeof m.touch === 'boolean') st.touch = m.touch;
+        if (finite(m.fps)) {
+            const f = clamp(Math.round(m.fps), 0, 240);
+            st.fps = f; st.fpsSum += f; st.fpsN++;
+            st.fpsMin = st.fpsN === 1 ? f : Math.min(st.fpsMin, f);
+        }
+        if (typeof m.q === 'string') st.q = m.q.slice(0, 8);
+        if (typeof m.gpu === 'string' && !st.gpu) st.gpu = m.gpu.slice(0, 90);
+        if (finite(m.load) && !st.load) st.load = clamp(Math.round(m.load * 10) / 10, 0, 600);
+        if (!st.dev && finite(m.w)) st.dev = { w: clamp(m.w | 0, 0, 9999), h: clamp(m.h | 0, 0, 9999), dpr: clamp(num(m.dpr, 1), 0, 8), cores: clamp(m.cores | 0, 0, 256), mem: clamp(num(m.mem, 0), 0, 1024) };
+        for (const e of arr(m.errs).slice(0, 5)) if (typeof e === 'string' && st.errs.length < 8) st.errs.push(e.slice(0, 220));
     }
 
     broadcastBoards(client) {

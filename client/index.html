@@ -97,6 +97,19 @@ button:focus-visible { outline: 3px solid var(--yellow); outline-offset: 2px; }
 #btnIndex { background: linear-gradient(#6ac0ff, #1a6ae8); }
 #btnFloors { background: linear-gradient(#b88aff, #6a2ad8); }
 #btnPets { background: linear-gradient(#ffb06a, #ff6a1a); }
+/* quick travel: to your garden, to the market */
+.big.tp { height: 4.3rem; }
+.big.tp .ic { font-size: 1.8rem; }
+.big.tp .lb { font-size: 1rem; margin-top: 0.1rem; }
+#btnHome { background: linear-gradient(#8af06a, #2a9a2a); }
+#btnMarket { background: linear-gradient(#ffd86a, #ff961a); }
+.big.hint { animation: pulse 0.8s ease-in-out infinite; box-shadow: inset 0 -0.35rem 0 rgba(0,0,0,0.2), inset 0 0.25rem 0 rgba(255,255,255,0.35), 0 0.22rem 0 var(--ink), 0 0 0 0.25rem #fff46a, 0 0 1.2rem 0.3rem rgba(255, 236, 110, 0.8); }
+/* the next floor: how close you are */
+#floorGoal { display: grid; gap: 0.2rem; min-width: 14rem; margin-top: 0.1rem; padding: 0.2rem 0.8rem 0.4rem; border-radius: 0.8rem; background: rgba(16,32,58,0.5); border: 2px solid rgba(255,255,255,0.25); color: #fff; font-size: 0.95rem; font-weight: 700; cursor: pointer; }
+#floorGoal .bar { height: 0.5rem; border-radius: 1rem; background: rgba(0,0,0,0.35); overflow: hidden; }
+#floorGoal .bar i { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, #ffd21e, #ff9a1a); transition: width 0.3s ease; }
+#floorGoal.ready { border-color: #fff46a; background: linear-gradient(#5ad83a, #2a9a2a); animation: pulse 0.9s ease-in-out infinite; }
+#floorGoal.ready .bar i { background: linear-gradient(90deg, #fff46a, #ffffff); }
 .badge { position: absolute; top: -0.35rem; right: -0.25rem; background: var(--red); border: 2px solid var(--ink); border-radius: 1rem; font-size: 0.78rem; padding: 0.02rem 0.38rem; font-weight: 700; z-index: 2; color: #fff; animation: pulse 0.9s ease-in-out infinite; }
 .big .badge { top: 0.15rem; right: 0.15rem; }
 
@@ -331,6 +344,8 @@ body.touch #placeBar .hint { display: none; }
     .ib .bub { width: 2.45rem; height: 2.45rem; font-size: 1.25rem; }
     .logo { font-size: 3rem; } .logo .c { font-size: 3.6rem; }
     .big { width: 4.8rem; height: 4.8rem; } .big .ic { font-size: 2.2rem; } .big .lb { font-size: 0.95rem; }
+    .big.tp { height: 3.5rem; } .big.tp .ic { font-size: 1.4rem; } .big.tp .lb { font-size: 0.85rem; }
+    #floorGoal { min-width: 11rem; font-size: 0.85rem; }
     .side { width: 5.2rem; } .side .ic { font-size: 2.5rem; } .side .lb { font-size: 0.95rem; } .side .sub { font-size: 0.85rem; } #btnGift .sub { font-size: 1.2rem; }
     #questTrack { min-width: 10rem; } #questTrack b { font-size: 0.9rem; }
 }
@@ -367,6 +382,7 @@ body.lowfx .big::after, body.lowfx #btnAuto .ic, body.lowfx #btnPet .ic, body.lo
 
         <div id="topBar">
             <div id="money" aria-label="Cash and Gems"><span id="cashVal" class="o">$100</span><span id="gemRow" class="o"><span class="gemI">💎</span><b id="gemVal">0</b></span></div>
+            <button id="floorGoal" hidden aria-label="Next floor"><span class="o1" id="fgTxt">🏢 Floor 2</span><span class="bar"><i id="fgBar"></i></span></button>
             <div id="tutBanner" hidden><button class="btn g-green o1" id="skipBtn">SKIP</button><span id="tutTxt" class="o">Buy an Apple! 🍎</span><span id="tutTip" class="o1"></span></div>
             <div id="chips" class="passive"><span class="chip o1" id="chipCash" hidden>💵 x2 0:00</span><span class="chip o1" id="chipGrow" hidden>⏩ x2 0:00</span><span class="chip o1" id="chipLuck" hidden>🍀 x3 0:00</span></div>
         </div>
@@ -380,6 +396,10 @@ body.lowfx .big::after, body.lowfx #btnAuto .ic, body.lowfx #btnPet .ic, body.lo
             <div class="bigRow">
                 <button class="big" id="btnFloors" aria-label="Floors"><span class="ic">🏢</span><span class="lb o1">Floors</span><span class="badge" id="floorBadge" hidden>!</span></button>
                 <button class="big" id="btnPets" aria-label="Pets"><span class="ic">🐾</span><span class="lb o1">Pets</span><span class="badge" id="petBadge" hidden>!</span></button>
+            </div>
+            <div class="bigRow">
+                <button class="big tp" id="btnHome" aria-label="Teleport to your garden"><span class="ic">🏡</span><span class="lb o1">Garden</span></button>
+                <button class="big tp" id="btnMarket" aria-label="Teleport to the market"><span class="ic">🌱</span><span class="lb o1">Market</span></button>
             </div>
         </div>
 

@@ -9,7 +9,7 @@ import * as BX from './bloxity.js';
 import { createAvatar, loadBase, packAvatar, unpackAvatar } from './avatar.js';
 import { pad, pollGamepad, rumble, onGamepadConnection } from './gamepad.js';
 import {
-    render, updateFx, dust, sparkleColumn, ring, fireworks, setQuality, getQuality, autoQualityAllowed, confetti, updateAmbient,
+    render, updateFx, dust, sparkleColumn, ring, fireworks, setQuality, getQuality, autoQualityAllowed, confetti, updateAmbient, setResScale, getResScale,
     fxWarmGroup, fxShowAll, leafPuff, harvestBurst, cashBurst, ripeSparkle, petal,
 } from './fx.js';
 import { buildWorld, warmUp, renderBoards, setGuide, guideGoal, sellRingOn, drawQuests, setBeanstalk, beanstalkUp, drawBeanSign, spinWorldWheel, petalAt } from './world.js';
@@ -21,7 +21,7 @@ import { PetPack, petWarmGroup } from './pets.js';
 import {
     promptEl, promptTxtEl, animateCounters, bumpCash, bumpGems, updateHud, renderHotbar, seedKeys, toast, questPop, bigText, flash, notEnough,
     openModal, closeModal, refreshModal, modalIs, codeResult, openDailyOnJoin, refreshDaily, closeTop, anyPopup, openDaily, showHatch, spinWheelTo,
-    setPlantTag, setPlaceBar, askConfirm, myFloors, buyFloor, stockLeft,
+    setPlantTag, setPlaceBar, askConfirm, myFloors, buyFloor, stockLeft, canBuyAny,
 } from './ui.js';
 import {
     CFG, SPECIES, SHOP_SEEDS, speciesById, MUTATIONS, TUTORIAL, KITS, SKINS, FLOORS, MAX_FLOORS, eventAt, restockWindow, fmt, money, clamp, petById,
@@ -294,6 +294,8 @@ addEventListener('keydown', (e) => {
     if (e.code === 'KeyF') { if (modalIs('floors')) closeModal(); else openModal('floors'); }
     if (e.code === 'KeyP') { if (modalIs('pets')) closeModal(); else openModal('pets'); }
     if (e.code === 'KeyI') { if (modalIs('index')) closeModal(); else openModal('index'); }
+    if (e.code === 'KeyG') actions.travel('home');
+    if (e.code === 'KeyM') actions.travel('market');
 });
 addEventListener('keyup', (e) => { keys[e.code] = false; });
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
@@ -606,36 +608,84 @@ function sparkles(dt) {
 // seed on the hotbar, PLANT)
 const guideV = new V3(), gPts = Array.from({ length: 8 }, () => new V3()), marketMark = new V3();
 let lastRoute = null;
+let ripeToastT = 0, ripeCheckT = 0;
 function guide() {
     const q = S.q || {}, tut = q.tut < TUTORIAL.length ? TUTORIAL[q.tut].kind : null;
     pointUi(running && myPlot >= 0 ? uiTarget(q, tut) : null);
-    if (!running || anyPopup() || myPlot < 0) { setGuide(null); return; }
+    if (!running || anyPopup() || myPlot < 0) { setGuide(null); hintTravel(null); return; }
     const hasSeed = seedKeys().length > 0, pl = plots[myPlot];
     const opt = { beam: 70, up: 0 };
+    let aim = null;
     // the market: the way ends on the plaza on your side (close enough to sell and shop), the arrow
     // floats just outside the tent
     const market = () => {
+        aim = 'market';
         const d = Math.hypot(P.pos.x, P.pos.z) || 1, r = COUNTER_R + 7;
         opt.beam = 0; opt.mark = marketMark.set(P.pos.x / d * (COUNTER_R + 13), 0, P.pos.z / d * (COUNTER_R + 13)); opt.max = 2;
         return guideV.set(P.pos.x / d * r, 0, P.pos.z / d * r);
     };
-    const plotIn = () => { const w = toWorld(myPlot, 0, (PLANT_AREA.z0 + PLANT_AREA.z1) / 2); opt.beam = FLOOR_H - 3; return guideV.set(w.x, floorY(0), w.z); };
-    const crate = () => { const w = toWorld(myPlot, CRATE.x, CRATE.z); opt.up = pl.crateN * CRATE_H; return guideV.set(w.x, 0, w.z); };
-    let target = null;
-    if (S.carry > 0 && (!tut || tut === 'sell' || tut === 'collect')) target = market();
-    else if (tut === 'buy') target = hasSeed && q.tut === 0 ? plotIn() : market();
-    else if (tut === 'plant') target = hasSeed ? (inMyPlot() ? null : plotIn()) : market();
-    else if (tut === 'harvest') {
+    const plotIn = () => { aim = 'home'; const w = toWorld(myPlot, 0, (PLANT_AREA.z0 + PLANT_AREA.z1) / 2); opt.beam = FLOOR_H - 3; return guideV.set(w.x, floorY(0), w.z); };
+    const crate = () => { aim = 'home'; const w = toWorld(myPlot, CRATE.x, CRATE.z); opt.up = pl.crateN * CRATE_H; return guideV.set(w.x, 0, w.z); };
+    // the plant that ripens first (the ripe ones first of all)
+    const nextRipe = () => {
         const now = net.now();
         let best = null, bt = Infinity;
         for (const p of myPlants()) { const k = Math.max(0, p.fa - now); if (k < bt) { bt = k; best = p; } }
-        if (best) { plantWorld(best, guideV); target = guideV; opt.up = plantHeight(best.sp); opt.beam = FLOOR_H - 3; }
-    } else if (tut === 'collect') target = pl.crate > 0 ? crate() : null;
+        if (!best) return null;
+        aim = 'home'; plantWorld(best, guideV); opt.up = plantHeight(best.sp); opt.beam = FLOOR_H - 3;
+        return guideV;
+    };
+    // the last step ("buy another plant") with too little Cash for any seed: earn some first
+    const broke = tut === 'buy' && q.tut === TUTORIAL.length - 1 && !canBuyAny(net.now());
+    let target = null;
+    if (S.carry > 0 && (!tut || tut === 'sell' || tut === 'collect' || broke)) target = market();
+    else if (broke) target = pl.crate > 0 ? crate() : nextRipe() || plotIn();
+    else if (tut === 'buy') target = hasSeed && q.tut === 0 ? plotIn() : market();
+    else if (tut === 'plant') target = hasSeed ? (inMyPlot() ? null : plotIn()) : market();
+    else if (tut === 'harvest') target = nextRipe();
+    else if (tut === 'collect') target = pl.crate > 0 ? crate() : null;
     else if (tut === 'sell') target = pl.crate > 0 ? crate() : null;
     lastRoute = target ? guideRoute(target) : null;
     setGuide(lastRoute, opt);
     sellRingOn(S.carry > 0);
+    // far from where the guide leads: the quick travel button there glows
+    hintTravel(target && Math.hypot(target.x - P.pos.x, target.z - P.pos.z) > 50 ? aim : null);
+    // after the tutorial: a nudge when plants are ripe at home and you're away from it
+    if (!tut && clockT - ripeCheckT > 3) {
+        ripeCheckT = clockT;
+        const now = net.now(), ripe = inMyPlot() ? 0 : myPlants().filter((p) => now >= p.fa).length;
+        if (ripe >= 3 && clockT - ripeToastT > 90) { ripeToastT = clockT; toast('🍎 ' + ripe + ' plants are ready to harvest! 🏡 Garden' + (isTouch ? '' : ' (G)'), '#9affb8'); }
+    }
 }
+let hintAim = null;
+function hintTravel(aim) {
+    if (aim === hintAim) return;
+    hintAim = aim;
+    $('#btnHome').classList.toggle('hint', aim === 'home');
+    $('#btnMarket').classList.toggle('hint', aim === 'market');
+}
+// Quick travel (the Garden / Market buttons, G / M): a blink to your greenhouse or to the market
+let travelT = -9;
+actions.travel = (where) => {
+    if (!running || myPlot < 0 || clockT - travelT < 0.6) return;
+    travelT = clockT;
+    let pos, yaw;
+    if (where === 'home') {
+        const w = toWorld(myPlot, 0, PLOT_D / 2 - 8);
+        pos = new V3(w.x, floorY(0) + 0.05, w.z); yaw = FRAMES[myPlot].yaw + Math.PI;
+    } else {
+        // the plaza on your greenhouse's side, facing the counter (close enough to sell and to shop)
+        const c = toWorld(myPlot, 0, 0), d = Math.hypot(c.x, c.z) || 1, r = COUNTER_R + 8;
+        pos = new V3(c.x / d * r, 0, c.z / d * r); yaw = Math.atan2(-c.x, -c.z);
+    }
+    $('#fade').style.opacity = 0.85;
+    sfx('lift', where === 'home');
+    setTimeout(() => {
+        teleport(pos, yaw);
+        $('#fade').style.opacity = 0;
+        ring(P.pos, 0x9affb8, 6, 0.5);
+    }, 160);
+};
 // the way from you to the target: round your greenhouse's sides, through its door, to a lift pad
 function guideRoute(target) {
     const pts = [];
@@ -720,7 +770,8 @@ function pointUi(el) {
 const edgeV = new V3();
 function updateEdgePtr() {
     const el = $('#edgePtr'), g = running && !anyPopup() ? guideGoal() : null;
-    if (!g) { if (!el.hidden) el.hidden = true; return; }
+    // (right next to you it needs no pointer: the arrow on the ground is under your feet)
+    if (!g || Math.hypot(g.x - P.pos.x, g.z - P.pos.z) < 18) { if (!el.hidden) el.hidden = true; return; }
     edgeV.copy(g).project(camera);
     const behind = edgeV.z > 1;
     if (!behind && Math.abs(edgeV.x) < 0.88 && Math.abs(edgeV.y) < 0.86) { if (!el.hidden) el.hidden = true; return; }
@@ -1233,26 +1284,88 @@ function update(dt) {
         setMusicIntensity(anyPopup() ? 0 : e.active ? 2 : 1);
     }
     metaT -= dt;
-    if (metaT <= 0) { metaT = 30; net.send('meta', { touch: isTouch, fps: lastFps }); }
+    if (metaT <= 0) { metaT = 30; sendMeta(); }
 }
 let lastFps = 60;
+
+// =====================================================================================
+// The play stats: how the game runs on this device and any error it hit (the server keeps them
+// with the session; /api/stats sums them up)
+// =====================================================================================
+const fpsWin = { sum: 0, n: 0 }, errSeen = new Set(), errQueue = [];
+let metaFirst = true, loadSecs = 0;
+function noteError(msg, src, line, col) {
+    const file = src ? String(src).split('/').pop().split('?')[0] : '';
+    const k = String(msg || '?').slice(0, 150) + (file ? ' @' + file + ':' + (line || 0) + ':' + (col || 0) : '');
+    if (errSeen.has(k) || errSeen.size >= 20) return;
+    errSeen.add(k);
+    errQueue.push(k);
+}
+window.addEventListener('error', (e) => noteError(e.message, e.filename, e.lineno, e.colno));
+window.addEventListener('unhandledrejection', (e) => noteError('promise: ' + ((e.reason && e.reason.message) || e.reason)));
+// leaving: the last numbers go out before the connection closes
+addEventListener('pagehide', () => { if (running) sendMeta(); });
+function gpuName() {
+    try {
+        const gl = renderer.getContext(), x = gl.getExtension('WEBGL_debug_renderer_info');
+        return String(x ? gl.getParameter(x.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)).slice(0, 90);
+    } catch (e) { return ''; }
+}
+function sendMeta() {
+    const m = { touch: isTouch, fps: fpsWin.n ? Math.round(fpsWin.sum / fpsWin.n) : lastFps, q: getQuality(), errs: errQueue.splice(0, 5) };
+    fpsWin.sum = 0; fpsWin.n = 0;
+    if (metaFirst) {
+        metaFirst = false;
+        Object.assign(m, { gpu: gpuName(), load: loadSecs, dpr: Math.round(devicePixelRatio * 100) / 100, w: innerWidth, h: innerHeight, cores: navigator.hardwareConcurrency || 0, mem: navigator.deviceMemory || 0 });
+    }
+    net.send('meta', m);
+}
 
 // =====================================================================================
 // Boot
 // =====================================================================================
 let frameErrors = 0;
 let lastFrame = 0, loadingSignaled = false, fpsAcc = 0, fpsFrames = 0, showFps = false, skipOdd = false, oddFrame = false;
-const fpsWatch = { t: 0, low: 0 };
+// The smoothness watch (every half second). First the resolution adapts: when the frame rate drops
+// the game draws fewer pixels, keeping the step only if it helped (a slow processor isn't helped by
+// fewer pixels), and draws them all again once it runs smoothly. Then, if it's still too slow, the
+// quality steps down (in the first moments of play that includes taking the shadows out of the shaders).
+const fpsWatch = { t: 0, avg: 60, low: 0, good: 0, trial: null, cpuUntil: 0, fails: 0, upAt: -99, upFrom: 1, ceil: 1, ceilUntil: 0 };
 function watchFps(fps) {
-    if (!running || document.hidden || !autoQualityAllowed()) return;
-    fpsWatch.t += 0.5;
-    if (fpsWatch.t < 3) return;
-    fpsWatch.low = fps < 40 ? fpsWatch.low + 0.5 : 0;
-    if (fpsWatch.low < 2.5) return;
-    fpsWatch.low = 0;
+    if (!running || document.hidden) return;
+    const w = fpsWatch;
+    w.t += 0.5;
+    w.avg += (fps - w.avg) * 0.35;
+    if (w.t < 3) return;
+    if (w.t > w.ceilUntil) w.ceil = 1;
+    if (w.trial) {
+        if (w.t - w.trial.at < 2) return;
+        // no better: the processor is the limit, so back to all the pixels (and wait longer each time)
+        if (w.avg < w.trial.fps * 1.06) { setResScale(w.trial.prev); w.fails++; w.cpuUntil = w.t + Math.min(240, 30 * w.fails); } else w.fails = 0;
+        w.trial = null;
+        return;
+    }
+    const scale = getResScale();
+    if (w.avg < 48 && w.t > w.cpuUntil && scale > 0.56) {
+        // right after a step up: that was one step too far, stay below it for a while
+        if (w.t - w.upAt < 6) { w.ceil = w.upFrom; w.ceilUntil = w.t + 60; }
+        w.trial = { at: w.t, fps: w.avg, prev: scale };
+        setResScale(scale * 0.85);
+        w.good = 0;
+        return;
+    }
+    if (w.avg >= 57) {
+        w.good += 0.5;
+        if (w.good >= 6 && scale < w.ceil - 0.01) { w.good = 0; w.upAt = w.t; w.upFrom = scale; setResScale(Math.min(w.ceil, scale / 0.88)); }
+    } else w.good = 0;
+    if (!autoQualityAllowed()) return;
+    w.low = w.avg < 40 && (scale <= 0.56 || w.t < w.cpuUntil) ? w.low + 0.5 : 0;
+    if (w.low < 3) return;
+    w.low = 0;
     const next = { high: 'medium', medium: 'low' }[getQuality()];
     if (!next) return;
-    setQuality(next, true);
+    setQuality(next, true, w.t < 45);
+    storageSet('bgt_quality_auto', next);
     toast('⚙️ Graphics set to ' + (next === 'medium' ? 'Medium' : 'Low') + ' for smoother play', '#7de8ff');
 }
 function frame(now) {
@@ -1264,6 +1377,7 @@ function frame(now) {
     if (fpsAcc >= 0.5) {
         const fps = fpsFrames / fpsAcc;
         lastFps = Math.round(fps);
+        if (running && !document.hidden) { fpsWin.sum += fps; fpsWin.n++; }
         if (showFps) $('#fps').textContent = lastFps + ' FPS';
         if (isTouch && !skipOdd && fps > 100) skipOdd = true;
         watchFps(fps); fpsAcc = 0; fpsFrames = 0;
@@ -1281,6 +1395,9 @@ function frame(now) {
             render();
         } catch (e) {
             if (frameErrors++ < 5) console.error('[frame]', e);
+            const at = String((e && e.stack) || '').split('\n').find((l) => /:\d+:\d+/.test(l)) || '';
+            noteError('[frame] ' + ((e && e.message) || e), '', 0, 0);
+            if (at) noteError('[frame at] ' + at.trim().slice(-120));
         }
         const w = performance.now() - w0;
         perf.n++; perf.sum += w; perf.max = Math.max(perf.max, w);
@@ -1349,6 +1466,8 @@ async function play() {
     toast(S.q.tut < TUTORIAL.length ? '👋 Welcome! This greenhouse is yours. Follow the arrows to the Seed Shop!' : '👋 Welcome back to your garden, ' + (S.name || 'gardener') + '!', '#ffffff');
     setTimeout(() => { if (audioSuspended()) toast('🔊 Click or tap anywhere for the sound!', '#7de8ff'); }, 3500);
     canvas.focus();
+    loadSecs = Math.round(performance.now() / 100) / 10;
+    metaT = 8;
     BX.loadingEnd();
 }
 function waitForLogin(ms) {

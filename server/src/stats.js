@@ -1,9 +1,11 @@
 // Turns the session records into the numbers that explain playtime: how long sessions last, how
-// far players get (the tutorial, floors built, plants placed) and whether they spend.
+// far players get (the tutorial, floors built, plants placed), whether they spend, how smoothly the
+// game runs on their devices and which errors they hit.
 import { TUTORIAL } from '../../shared/config.js';
 import { loadSessions } from './profiles.js';
 
 const BUCKETS = [[0, 60, '<1 min'], [60, 180, '1-3 min'], [180, 300, '3-5 min'], [300, 600, '5-10 min'], [600, 900, '10-15 min'], [900, 1800, '15-30 min'], [1800, Infinity, '30+ min']];
+const FPS_BUCKETS = [[0, 20, '<20'], [20, 30, '20-30'], [30, 45, '30-45'], [45, 55, '45-55'], [55, Infinity, '55+']];
 const pct = (n, d) => (d ? Math.round((n / d) * 1000) / 10 : 0);
 const avg = (list, f) => Math.round((list.reduce((a, d) => a + (f(d) || 0), 0) / Math.max(1, list.length)) * 10) / 10;
 function quantile(sorted, q) {
@@ -20,13 +22,28 @@ function lengths(list) {
         buckets: Object.fromEntries(BUCKETS.map(([a, b, name]) => [name, pct(secs.filter((s) => s >= a && s < b).length, secs.length) + '%'])),
     };
 }
+// how smoothly it runs: the session's average FPS in buckets, and its mean playtime per bucket
+function fpsView(list) {
+    const withFps = list.filter((d) => d.fps > 0);
+    return Object.fromEntries(FPS_BUCKETS.map(([a, b, name]) => {
+        const l = withFps.filter((d) => d.fps >= a && d.fps < b);
+        return [name, { sessions: pct(l.length, withFps.length) + '%', meanMin: Math.round(avg(l, (d) => d.secs) / 6) / 10 }];
+    }));
+}
+const median = (vals) => quantile(vals.filter((v) => v > 0).sort((a, b) => a - b), 0.5);
+function topCounts(values, n) {
+    const m = new Map();
+    for (const v of values) if (v) m.set(v, (m.get(v) || 0) + 1);
+    return [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([k, c]) => ({ n: c, v: k }));
+}
 
-export async function statsSummary(days) {
+export async function statsSummary(days, raw) {
     const since = Date.now() - days * 86400000;
     // Very short visits (under 10 s) are page bounces, counted separately
     const all = await loadSessions(since, 20000);
     const list = all.filter((d) => d.secs >= 10);
-    return {
+    const fresh = list.filter((d) => d.fresh && !(d.tut0 > 0));
+    const out = {
         days, since: new Date(since).toISOString(),
         bounces: all.length - list.length,
         all: lengths(list),
@@ -36,14 +53,27 @@ export async function statsSummary(days) {
         desktop: lengths(list.filter((d) => !d.touch)),
         tutorialDonePct: pct(list.filter((d) => (d.tut || 0) >= TUTORIAL.length).length, list.length),
         tutorialStep: Object.fromEntries(TUTORIAL.map((t, i) => [i + ': ' + t.text, pct(list.filter((d) => (d.tut || 0) === i).length, list.length) + '%'])),
+        // new players: the median second of their session each tutorial step was reached
+        tutorialSecs: Object.fromEntries(TUTORIAL.map((t, i) => [String(i + 1), median(fresh.map((d) => (d.tutAt || {})[i + 1] || 0))])),
         builtAFloorPct: pct(list.filter((d) => d.floors > d.floors0).length, list.length),
         avgPlanted: avg(list, (d) => d.planted),
         avgHarvests: Math.round(avg(list, (d) => d.harvests)),
         avgSells: avg(list, (d) => d.sells),
         avgCashEarned: Math.round(avg(list, (d) => d.cash)),
+        medianCashEarned: median(list.map((d) => d.cash || 0)),
         avgFps: avg(list.filter((d) => d.fps), (d) => d.fps),
+        fpsDesktop: fpsView(list.filter((d) => !d.touch)),
+        fpsPhones: fpsView(list.filter((d) => d.touch)),
+        quality: topCounts(list.map((d) => d.q), 5),
+        slowGpus: topCounts(list.filter((d) => d.fps > 0 && d.fps < 35).map((d) => d.gpu), 12),
+        loadSecs: { desktop: median(list.filter((d) => !d.touch).map((d) => d.load || 0)), phones: median(list.filter((d) => d.touch).map((d) => d.load || 0)) },
+        errorSessionsPct: pct(list.filter((d) => d.errs && d.errs.length).length, list.length),
+        errors: topCounts(list.flatMap((d) => d.errs || []), 25),
         boughtSomethingPct: pct(list.filter((d) => d.buys > 0).length, list.length),
         hatchedPct: pct(list.filter((d) => d.eggs > 0).length, list.length),
         floorsReached: [1, 2, 3, 4, 5, 6, 7, 8].map((f) => ({ floors: f, pct: pct(list.filter((d) => (d.floors || 1) >= f).length, list.length) })),
     };
+    // the newest sessions as they were recorded (no names or ids are stored)
+    if (raw) out.raw = all.slice(0, raw);
+    return out;
 }

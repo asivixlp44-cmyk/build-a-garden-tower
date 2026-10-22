@@ -10,8 +10,21 @@ export const QUALITIES = {
     high: { label: 'High', ratio: 2, shadows: true, shadowMap: 2048, glitter: true },
 };
 const weakPC = (navigator.hardwareConcurrency || 8) <= 4 || (navigator.deviceMemory || 8) <= 4;
-let quality = isTouch || weakPC ? 'low' : 'medium';
-try { quality = localStorage.getItem('bgt_quality') || quality; } catch (e) { /* default */ }
+// The graphics chip by name: software renderers, older integrated chips and phone chips start on Low
+function weakGPU() {
+    try {
+        const gl = renderer.getContext(), x = gl.getExtension('WEBGL_debug_renderer_info');
+        const name = String(x ? gl.getParameter(x.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)).toLowerCase();
+        if (/swiftshader|llvmpipe|softpipe|software|basic render|mali|adreno|powervr|videocore/.test(name)) return true;
+        // Intel's older integrated chips (HD Graphics, Iris before Xe, UHD 6xx) and AMD's small Vega / R-series ones
+        if (/intel/.test(name) && /(^|[^u])hd graphics|iris\(r\) (plus|pro)?\s*graphics [0-9]|iris graphics|uhd graphics 6\d\d/.test(name)) return true;
+        if (/radeon\(tm\) (r[2-5]|vega [3-8])\b|radeon r[2-5] graphics/.test(name)) return true;
+        return false;
+    } catch (e) { return false; }
+}
+let quality = isTouch || weakPC || weakGPU() ? 'low' : 'medium';
+// your own choice, else where an earlier session's automatic step-down ended up
+try { quality = localStorage.getItem('bgt_quality') || localStorage.getItem('bgt_quality_auto') || quality; } catch (e) { /* default */ }
 if (!QUALITIES[quality]) quality = 'medium';
 
 // No tone mapping, like Bloxity's top games: colours go to the screen as lit
@@ -36,9 +49,19 @@ function setShadows(on) {
     // the map is drawn at least once (and again after a resize) so the shaders always have one
     renderer.shadowMap.needsUpdate = true;
 }
+// Dynamic resolution (main.js): when the graphics chip can't keep up, fewer pixels are drawn
+let resScale = 1;
+export function setResScale(k) {
+    k = Math.max(0.5, Math.min(1, k));
+    if (Math.abs(k - resScale) < 0.01) return;
+    resScale = k;
+    renderer.setPixelRatio(Math.min(devicePixelRatio || 1, QUALITIES[quality].ratio) * resScale);
+    pointScale.value = innerHeight * renderer.getPixelRatio() * 0.5;
+}
+export const getResScale = () => resScale;
 function applyQuality() {
     const q = QUALITIES[quality];
-    renderer.setPixelRatio(Math.min(devicePixelRatio || 1, q.ratio));
+    renderer.setPixelRatio(Math.min(devicePixelRatio || 1, q.ratio) * resScale);
     resizeFx();
     glitter.visible = q.glitter;
     // the page's soft vignette is one more full-screen layer to composite: Low goes without
@@ -56,12 +79,14 @@ export function getQuality() { return quality; }
 // minute can't leave the game stuck on Low; anything else is the player's choice and is saved.
 let autoAllowed = true;
 export const autoQualityAllowed = () => autoAllowed;
-export function setQuality(q, auto) {
+export function setQuality(q, auto, early) {
     if (!QUALITIES[q]) return;
     if (!auto && q !== quality) autoAllowed = false;
     quality = q;
     if (!auto) { try { localStorage.setItem('bgt_quality', q); } catch (e) { /* ignore */ } }
-    if (!auto) setShadowCode(QUALITIES[q].shadows);
+    // the step-down in the first moments of play also takes the shadow code out of the shaders (one
+    // short rebuild right away beats paying for it on every pixel all session)
+    if (!auto || early) setShadowCode(QUALITIES[q].shadows);
     applyQuality();
 }
 function resizeFx() {

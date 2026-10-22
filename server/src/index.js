@@ -30,12 +30,13 @@ const app = config({
     },
     initializeExpress: (expressApp) => {
         expressApp.get('/health', (req, res) => res.json({ ok: true, db: USE_DB }));
-        // Play stats (aggregate, no names): /api/stats?key=<stats key>&days=7
+        // Play stats (aggregate, no names): /api/stats?key=<stats key>&days=7 (&raw=50: the newest sessions too)
         expressApp.get('/api/stats', async (req, res) => {
             const key = typeof req.query.key === 'string' ? req.query.key : '';
             if (ON_LEGION && !keyOk(key)) return res.status(401).json({ error: 'bad key' });
             const days = Math.min(60, Math.max(1, Number(req.query.days) || 7));
-            try { res.json(await statsSummary(days)); } catch (e) { res.status(503).json({ error: e.message }); }
+            const raw = Math.min(500, Math.max(0, Number(req.query.raw) || 0));
+            try { res.json(await statsSummary(days, raw)); } catch (e) { res.status(503).json({ error: e.message }); }
         });
         if (fs.existsSync(CLIENT_DIST)) expressApp.use(express.static(CLIENT_DIST));
     },

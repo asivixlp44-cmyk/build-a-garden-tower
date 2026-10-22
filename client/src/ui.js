@@ -56,7 +56,7 @@ export function updateHud() {
     // the tutorial (with SKIP), or nothing
     const q = S.q || {}, tut = q.tut < TUTORIAL.length ? TUTORIAL[q.tut] : null;
     $('#tutBanner').hidden = !tut;
-    if (tut) { setText($('#tutTxt'), tut.text); setText($('#tutTip'), tut.tip); }
+    if (tut) { setText($('#tutTxt'), tut.text); setText($('#tutTip'), q.tut === TUTORIAL.length - 1 && !canBuyAny(now) ? 'Harvest and sell more crates to afford one! 📦' : tut.tip); }
     // the daily quest tracker: the first one not done yet
     const dq = S.dq || { p: {}, c: {} };
     const Q = DAILY_QUESTS.find((x) => !(dq.c || {})[x.id]);
@@ -87,6 +87,16 @@ export function updateHud() {
     $('#dailyBadge').hidden = !dailyStatus(S.daily, now).can;
     const f = myFloors();
     $('#floorBadge').hidden = !(f < MAX_FLOORS && S.cash >= FLOORS[f].price);
+    // the next floor: a bar filling up with your Cash (once the tutorial is done)
+    const fg = $('#floorGoal'), showFg = !tut && f < MAX_FLOORS;
+    fg.hidden = !showFg;
+    if (showFg) {
+        const F = FLOORS[f], ready = S.cash >= F.price;
+        fg.classList.toggle('ready', ready);
+        setText($('#fgTxt'), ready ? '🏢 BUILD ' + F.name.toUpperCase() + '!' : '🏢 ' + F.name + ': ' + money(S.cash) + ' / ' + money(F.price));
+        const w = Math.round(Math.min(1, S.cash / F.price) * 100) + '%';
+        if ($('#fgBar').style.width !== w) $('#fgBar').style.width = w;
+    }
     $('#petBadge').hidden = !((S.pets || []).length > (S.eq || []).length && (S.eq || []).length < slots());
     // the event pill: what's on, or what's next
     const e = eventAt(now);
@@ -100,6 +110,8 @@ export function updateHud() {
     if (modalKind === 'seeds' || modalKind === 'wheel' || modalKind === 'gifts' || modalKind === 'quests') refreshModal();
 }
 export const slots = () => PET_SLOTS + ((S.passes || {}).PetSlot ? 1 : 0);
+// can you afford any seed the Seed Shop has in stock right now?
+export const canBuyAny = (now) => SHOP_SEEDS.some((sp) => S.cash >= sp.price && stockLeft(sp.id, now) > 0);
 
 // ----- the hotbar: the shovel, then the seeds in your bag -----
 let slotKey = '';
@@ -624,6 +636,9 @@ $('#btnGift').addEventListener('click', () => {
     if (k >= 0) net.send('gift', { k }); else openModal('gifts');
 });
 $('#money').addEventListener('click', () => openModal('shop'));
+$('#floorGoal').addEventListener('click', () => { const f = myFloors(); if (f < MAX_FLOORS && S.cash >= FLOORS[f].price) buyFloor(); else openModal('floors'); });
+$('#btnHome').addEventListener('click', () => actions.travel && actions.travel('home'));
+$('#btnMarket').addEventListener('click', () => actions.travel && actions.travel('market'));
 $('#questTrack').addEventListener('click', () => openModal('quests'));
 $('#btnQuests').addEventListener('click', () => openModal('quests'));
 $('#btnConfig').addEventListener('click', () => openModal('config'));
